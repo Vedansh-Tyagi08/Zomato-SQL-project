@@ -1,0 +1,218 @@
+
+-- Q1. What is the total amount each customer spent on Zomato ?
+---------------------------------------------------------------
+
+SELECT s.user_id, SUM(p.price) AS total_spent
+FROM sales AS s
+INNER JOIN product AS p
+ON s.product_id = p.product_id
+GROUP BY s.user_id 
+ORDER BY s.user_id;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q2. How many days has each customer visited Zomato ?
+-------------------------------------------------------
+
+SELECT user_id, COUNT(DISTINCT created_date) AS distinct_days_visited
+FROM sales
+GROUP BY user_id;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q3. What was the first product purchased by each customer ?
+--------------------------------------------------------------
+
+SELECT s.user_id, s.created_date, s.product_id, p.product_name
+FROM(
+	 SELECT *, ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY created_date ASC) AS rn
+	 FROM sales
+	) AS s
+INNER JOIN product AS p
+ON s.product_id = p.product_id
+WHERE rn = 1
+ORDER BY s.user_id;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q4. What is the most purchased item on the menu and how many times was it purhased ?
+---------------------------------------------------------------------------------------
+
+WITH cte AS(
+			SELECT product_id
+			FROM(
+				SELECT product_id, COUNT(product_id) AS cnt
+				FROM sales
+				GROUP BY product_id
+				ORDER BY cnt DESC
+				LIMIT 1
+				)
+			)
+SELECT user_id, product_id, COUNT(product_id) AS times_product_purchased
+FROM sales
+WHERE product_id = (SELECT * FROM cte)
+GROUP BY user_id, product_id
+ORDER BY user_id ASC;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q5. Which item was the most popular for each customer ?
+----------------------------------------------------------
+
+SELECT user_id, product_id, times_product_purchased
+FROM(
+	SELECT user_id, product_id, COUNT(product_id) AS times_product_purchased, 
+		RANK() OVER(PARTITION BY user_id ORDER BY COUNT(product_id) DESC) AS rnk
+	FROM sales
+	GROUP BY user_id, product_id
+	ORDER BY user_id ASC, times_product_purchased DESC
+	)
+WHERE rnk = 1;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q6. Which item is first purchased by the customer after they became a gold member ?
+--------------------------------------------------------------------------------------
+
+WITH cte AS
+(
+	SELECT s.user_id, s.created_date, s.product_id, g.gold_signup_date, 
+		ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY s.created_date) AS rn
+	FROM sales AS s
+	INNER JOIN goldusers_signup AS g
+	ON s.user_id = g.userid
+	WHERE s.created_date > g.gold_signup_date
+)
+SELECT * FROM cte
+WHERE rn = 1;
+----------------------------------------------------------------------------------------------------------------------
+
+
+-- Q7. Which item was purchased just before the customer becamea a gold member ?
+--------------------------------------------------------------------------------
+
+WITH cte AS 
+(
+	SELECT s.user_id, s.created_date, s.product_id, g.gold_signup_date, 
+		ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY s.created_date DESC) AS rn
+	FROM sales AS s
+	INNER JOIN goldusers_signup AS g
+	ON s.user_id = g.userid
+	WHERE s.created_date < g.gold_signup_date
+)
+SELECT * FROM cte
+WHERE rn = 1;
+---------------------------------------------------------------------------------------------------------------------
+
+
+-- Q8. What is the total amount spent by each member before they became a gold member ?
+
+WITH cte AS(
+			SELECT *, SUM(price) OVER(PARTITION BY x.user_id) AS total_spent
+			FROM(
+				SELECT s.user_id, s.created_date, s.product_id, g.gold_signup_date
+				FROM sales AS s
+				INNER JOIN goldusers_signup AS g
+				ON s.user_id = g.userid
+				WHERE s.created_date < g.gold_signup_date
+				) AS x
+			INNER JOIN product AS p
+			ON x.product_id = p.product_id
+			ORDER BY x.user_id ASC
+			)
+SELECT user_id, total_spent, COUNT(created_date) AS total_orders_placed
+FROM cte
+GROUP BY user_id, total_spent
+ORDER BY user_id ASC;
+--------------------------------------------------------------------------------------------------------------------
+
+
+-- Q9. If buying each product generates points for eg. Rs5=2 zomato points and each product has different purchasing 
+-- points for eg. for P1 Rs5=1 zomato point, for P2 Rs10=5 zomato points, for P3 Rs5=1 zomato point.
+
+-- Calculate points collected by each customer and for which product most points have been till now.
+----------------------------------------------------------------------------------------------------
+
+SELECT user_id, SUM(points) AS total_points_with_customer      -- points collected by each customer
+FROM (  SELECT *,
+			CASE 
+				WHEN product_name = 'p1' THEN (price/5)
+				WHEN product_name = 'p2' THEN (price/10)*5
+				WHEN product_name = 'p3' THEN (price/5)
+			END AS points
+		FROM product AS p
+		INNER JOIN sales AS s
+		ON p.product_id = s.product_id
+	 )
+GROUP BY user_id
+ORDER BY user_id ASC;
+
+SELECT product_id, SUM(points) AS total_points_per_product      -- points per product
+FROM (  SELECT p.product_id, p.product_name, p.price, s.user_id, s.created_date,
+			CASE 
+				WHEN product_name = 'p1' THEN (price/5)
+				WHEN product_name = 'p2' THEN (price/10)*5
+				WHEN product_name = 'p3' THEN (price/5)
+			END AS points
+		FROM product AS p
+		INNER JOIN sales AS s
+		ON p.product_id = s.product_id
+	 )
+GROUP BY product_id
+ORDER BY product_id ASC;
+--------------------------------------------------------------------------------------------------------------------
+
+
+-- Q10. In the first year after a customer joins the gold membership (including their join date) irrespective of 
+-- what the customer has purchased they earn 5 zomato points for every Rs10 spent.
+
+-- Who earned more, 1 or 3 and what was their points earnings in their first year ?
+-----------------------------------------------------------------------------------
+
+SELECT * 
+FROM (
+		SELECT user_id, SUM( (price/10)*5 ) AS total_points_earned,
+				ROW_NUMBER() OVER(ORDER BY SUM( (price/10)*5 ) DESC) AS rn
+		FROM(
+				SELECT x.user_id, p.product_id, p.price
+				FROM (
+						SELECT s.user_id, s.created_date, s.product_id, g.gold_signup_date
+						FROM sales AS s
+						INNER JOIN goldusers_signup AS g
+						ON s.user_id = g.userid
+						WHERE s.created_date >= g.gold_signup_date 
+							AND s.created_date <= g.gold_signup_date + interval'1 year'
+					 ) AS x
+				INNER JOIN product AS p
+				ON x.product_id = p.product_id
+				ORDER BY x.user_id
+			)
+		GROUP BY user_id
+	)
+WHERE rn = 1;
+--------------------------------------------------------------------------------------------------------------------
+
+
+-- Q11. Rank all the transactions of customers.
+-----------------------------------------------
+
+SELECT *, RANK() OVER(PARTITION BY user_id ORDER BY created_date ASC) AS rnk
+FROM sales;
+---------------------------------------------------------------------------------------------------------------------
+
+
+-- Q12. Rank all the transactions for each member whenever they are a zomato gold member and for every non gold 
+-- member transaction mark as 'n/a'.
+----------------------------------------------------------------
+
+SELECT *,
+	CASE
+		WHEN gold_signup_date IS null THEN 'n/a'
+		ELSE RANK() OVER(PARTITION BY user_id ORDER BY created_date DESC)::varchar
+	END  AS rnk
+FROM(
+		SELECT s.user_id, s.created_date, s.product_id, g.gold_signup_date
+		FROM sales AS s
+		LEFT JOIN goldusers_signup AS g
+		ON s.user_id = g.userid AND s.created_date >= g.gold_signup_date
+	);
